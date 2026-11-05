@@ -5,7 +5,7 @@ FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     make \
     gcc \
@@ -44,7 +44,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install Node.js, Dropbear, Stunnel, jq, dan tools pendukung
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     dropbear \
     stunnel4 \
@@ -55,7 +55,7 @@ RUN apt-get update && apt-get install -y \
     bash \
     jq \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
+    && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -70,16 +70,22 @@ RUN chmod +x /usr/local/bin/badvpn-udpgw
 # Atur Direktori Kerja Container
 WORKDIR /app
 
-# Salin package.json dan pasang dependensi NPM (untuk server.js)
+# Salin package.json dan pasang dependensi NPM (untuk server.cjs)
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev || npm install
 
-# Salin server.js dan script entrypoint
-COPY server.js start.sh ./
+# ✅ FIX #1: gunakan server.cjs (CommonJS) agar tidak konflik dengan "type":"module" di package.json
+# ✅ FIX #2: hanya copy file yang memang ada. ws-proxy/mux opsional:
+#            kalau kamu punya file-nya, uncomment baris COPY di bawah dan simpan sebagai .cjs
+COPY server.cjs start.sh ./
+# COPY ws-proxy.cjs mux.cjs ./
 RUN chmod +x start.sh
 
 # Salin hasil build frontend (dist/) dari stage frontend
 COPY --from=frontend /web/dist ./dist
+
+# Port UI/server utama (Railway override via env PORT tetap dihormati oleh start.sh -> server.cjs)
+EXPOSE 8081
 
 # Eksekusi utama saat container aktif (Berjalan penuh sebagai ROOT)
 CMD ["./start.sh"]
