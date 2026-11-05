@@ -74,18 +74,27 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev || npm install
 
-# ✅ FIX #1: gunakan server.cjs (CommonJS) agar tidak konflik dengan "type":"module" di package.json
-# ✅ FIX #2: hanya copy file yang memang ada. ws-proxy/mux opsional:
-#            kalau kamu punya file-nya, uncomment baris COPY di bawah dan simpan sebagai .cjs
-COPY server.cjs start.sh ./
-# COPY ws-proxy.cjs mux.cjs ./
+# =================================================================
+# ✅ SALIN SEMUA ENTRYPOINT & SERVICE SCRIPT (CommonJS — .cjs)
+# =================================================================
+# server.cjs    -> UI + API + WebSocket gateway (port 8081)
+# ws-proxy.cjs  -> SSH WebSocket proxy (port 8880)
+# mux.cjs       -> TLS/WS traffic splitter (port 8881)
+# start.sh      -> Entrypoint orchestrator
+COPY server.cjs start.sh ws-proxy.cjs mux.cjs ./
 RUN chmod +x start.sh
 
 # Salin hasil build frontend (dist/) dari stage frontend
 COPY --from=frontend /web/dist ./dist
 
-# Port UI/server utama (Railway override via env PORT tetap dihormati oleh start.sh -> server.cjs)
-EXPOSE 8081
+# =================================================================
+# PORTS
+# =================================================================
+# 8081 -> UI + API + Xray Gateway (server.cjs)
+# 8880 -> WS-Proxy SSH Dropbear (ws-proxy.cjs)
+# 8881 -> Mux TLS/WS splitter (mux.cjs)
+# 8001 -> Xray internal inbound (VLESS/VMess/Trojan)
+EXPOSE 8081 8880 8881
 
 # Eksekusi utama saat container aktif (Berjalan penuh sebagai ROOT)
 CMD ["./start.sh"]
