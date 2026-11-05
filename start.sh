@@ -10,7 +10,10 @@ SYS_CFG="/tmp/system_config.json"
 # 🧹 PEMBERSIHAN PROSES LAMA (PREVENT EADDRINUSE)
 # =================================================================
 echo "[*] Memersihkan proses lama & port yang tersangkut..."
-pkill -9 -f "node" 2>/dev/null
+# Perbaikan: pkill spesifik per proses, jangan -f "node" (bisa bunuh ws-proxy / mux)
+pkill -9 -f "node server"   2>/dev/null
+pkill -9 -f "node ws-proxy" 2>/dev/null
+pkill -9 -f "node mux"      2>/dev/null
 pkill -9 dropbear 2>/dev/null
 pkill -9 stunnel4 2>/dev/null
 pkill -9 cloudflared 2>/dev/null
@@ -104,29 +107,60 @@ EOF
 rm -f /var/run/stunnel4/stunnel.pid 2>/dev/null
 stunnel4 /etc/stunnel/stunnel.conf
 
-echo "[*] Memulai WS-Proxy untuk SSH Dropbear di Port Lokal 8880..."
-export WS_PORT="8880"
-nohup node ws-proxy.js >/dev/null 2>&1 &
+# =================================================================
+# 🔌 WS-PROXY OPSIONAL (hanya jika file benar-benar ada di image)
+# =================================================================
+if [ -f /app/ws-proxy.cjs ]; then
+    echo "[*] Memulai WS-Proxy untuk SSH Dropbear di Port Lokal 8880 (ws-proxy.cjs)..."
+    export WS_PORT="8880"
+    nohup node /app/ws-proxy.cjs >/dev/null 2>&1 &
+elif [ -f /app/ws-proxy.js ]; then
+    echo "[*] Memulai WS-Proxy (legacy ws-proxy.js) di Port 8880..."
+    export WS_PORT="8880"
+    nohup node /app/ws-proxy.js >/dev/null 2>&1 &
+else
+    echo "[*] ws-proxy tidak ditemukan — SSH-WS ditangani langsung oleh server.cjs (/ssh-ws path di port 8081)"
+fi
 
+# =================================================================
+# 🚀 BADVPN UDPGW
+# =================================================================
 if [ -f /usr/local/bin/badvpn-udpgw ]; then
     echo "[*] Memulai BadVPN udpgw di Port Global ${UDPGW_PORT}..."
     nohup /usr/local/bin/badvpn-udpgw --listen-addr 0.0.0.0:${UDPGW_PORT} --max-clients ${UDPGW_MAX_CLIENTS} --max-connections-for-client 50 >/dev/null 2>&1 &
 fi
 
-TARGET_ZT_PORT="${ARGO_PORT:-8880}"
-
+# =================================================================
+# ☁️ TOKEN CLOUDFLARE → DITERUSKAN KE server.cjs (SINGLE OWNER)
+# =================================================================
+# Perbaikan: JANGAN spawn cloudflared di sini. server.cjs adalah satu-satunya
+# pemilik tunnel (agar /api/set-token bisa restart dengan benar).
 if [ -n "$TOKEN" ]; then
-    echo "[*] Menghubungkan Terowongan SSH Zero Trust ke Port ${TARGET_ZT_PORT}..."
-    /usr/local/bin/cloudflared tunnel run --protocol http2 --no-tls-verify --token "$TOKEN" > /tmp/named_tunnel.log 2>&1 &
+    echo "[*] TOKEN diteruskan ke server.cjs (single-tunnel manager)..."
+    echo "$TOKEN" > /tmp/zt_single_token.txt
+else
+    echo "[*] TOKEN tidak di-set — server.cjs akan buat Quick Tunnel otomatis."
+    rm -f /tmp/zt_single_token.txt 2>/dev/null
 fi
 
 sleep 1
 
-echo "[*] Memulai Mux.js di Port 8881..."
-nohup node mux.js >/dev/null 2>&1 &
+# =================================================================
+# 🧩 MUX.JS OPSIONAL
+# =================================================================
+if [ -f /app/mux.cjs ]; then
+    echo "[*] Memulai Mux.js di Port 8881 (mux.cjs)..."
+    nohup node /app/mux.cjs >/dev/null 2>&1 &
+elif [ -f /app/mux.js ]; then
+    echo "[*] Memulai Mux.js (legacy mux.js) di Port 8881..."
+    nohup node /app/mux.js >/dev/null 2>&1 &
+fi
 
 sleep 1
 
-echo "[*] Menjalankan Server Utama UI & Gateway Server.js..."
-# PAKSA server.js di port 8081 khusus untuk UI, supaya tidak merebut PORT=8881 bawaan Railway milik Mux.js
-PORT=8081 exec node server.js
+# =================================================================
+# 🎯 JALANKAN SERVER UTAMA (CommonJS — .cjs)
+# =================================================================
+echo "[*] Menjalankan Server Utama UI & Gateway (server.cjs)..."
+# PAKSA server.cjs di port 8081 khusus untuk UI, supaya tidak merebut PORT=8881 bawaan Railway
+PORT=8081 exec node /app/server.cjs
