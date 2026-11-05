@@ -173,28 +173,28 @@ export function ConfigGenerator({ stats, showToast }: ConfigGeneratorProps) {
         icon={<Zap size={20} />}
       />
 
-      <Card>
+      <Card className="overflow-hidden">
         <SectionTitle>Configuration Parameters</SectionTitle>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-          <Field label="UUID / Pass">
-            <Input value={uuid} onChange={setUuid} readOnly className="font-mono" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4 min-w-0">
+          <Field label="UUID / Pass" className="min-w-0 overflow-hidden">
+            <Input value={uuid} onChange={setUuid} readOnly className="font-mono truncate" />
           </Field>
-          <Field label="Target Domain">
-            <Select value={domain} onChange={setDomain} options={domainOptions} className="font-mono font-bold" />
+          <Field label="Target Domain" className="min-w-0 overflow-hidden">
+            <Select value={domain} onChange={setDomain} options={domainOptions} className="font-mono font-bold truncate" />
           </Field>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-          <Field label="Bug Host (SNI / CDN)">
-            <Input value={bugHost} onChange={setBugHost} className="font-mono" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4 min-w-0">
+          <Field label="Bug Host (SNI / CDN)" className="min-w-0 overflow-hidden">
+            <Input value={bugHost} onChange={setBugHost} className="font-mono truncate" />
           </Field>
-          <Field label="Port Target">
+          <Field label="Port Target" className="min-w-0 overflow-hidden">
             <Select value={port} onChange={setPort} options={portOptions} className="font-mono font-bold" />
           </Field>
         </div>
 
-        <Field label="Format Output Config">
+        <Field label="Format Output Config" className="min-w-0 overflow-hidden">
           <Select value={format} onChange={setFormat} options={formatOptions} className="font-mono font-bold" />
         </Field>
       </Card>
@@ -207,7 +207,7 @@ export function ConfigGenerator({ stats, showToast }: ConfigGeneratorProps) {
             Reality / Railway
           </span>
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-3 gap-2 min-w-0">
           {realityButtons.map(({ protocol, label }) => (
             <GenButton
               key={`reality-${protocol}`}
@@ -229,7 +229,7 @@ export function ConfigGenerator({ stats, showToast }: ConfigGeneratorProps) {
               {group.title}
             </span>
           </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-3 gap-2 min-w-0">
             {protocols.map(({ protocol, label }) => (
               <GenButton
                 key={`${group.type}-${protocol}`}
