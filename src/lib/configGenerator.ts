@@ -35,7 +35,7 @@ export function generateConfig(params: GenerateConfigParams): string {
   let targetWsHost = type === 'sni_reverse' ? bugHost : host;
   let finalPath = type === 'cdn' ? `/${bugHost}${basePath}` : basePath;
 
-  let remark = `DDFATHU-${protocol.toUpperCase()}-${type.toUpperCase()}-${port}`;
+  let remark = `FREEDOM-${protocol.toUpperCase()}-${type.toUpperCase()}-${port}`;
   if (type === 'reality') {
     const protoLabel =
       protocol === 'vless' ? 'VLESS' : protocol === 'vmess' ? 'VMESS' : 'TROJAN';
