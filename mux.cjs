@@ -1,72 +1,140 @@
 #!/usr/bin/env node
+"use strict";
 
-const net = require('net');
+/**
+ * TCP Multiplexer sederhana ala sslh (versi Node.js / CommonJS).
+ *
+ * Mendengarkan di SATU port publik, lalu mengintip beberapa byte pertama
+ * dari koneksi masuk untuk menentukan protokolnya:
+ *
+ *   - Byte pertama 0x16 (TLS handshake record)      -> diteruskan ke Stunnel (SSL)
+ *   - Selain itu (dianggap teks/HTTP-WS handshake)  -> diteruskan ke ws-proxy (WS)
+ *
+ * Berguna untuk platform seperti Railway yang cuma menyediakan SATU
+ * TCP Proxy publik per service, sehingga SSH-SSL dan SSH-WS tetap bisa
+ * diakses lewat port publik yang sama.
+ */
 
-const PUBLIC_PORT = parseInt(process.env.MUX_PORT || '8881');
-const SSL_TARGET = parseInt(process.env.SSL_TARGET_PORT || '2443');
-const WS_TARGET = parseInt(process.env.WS_TARGET_PORT || '8880');
+const net = require("net");
 
-const server = net.createServer((clientConn) => {
-    clientConn.setNoDelay(true);
-    clientConn.setKeepAlive(true, 15000); // Anti silent disconnect
-    clientConn.readableHighWaterMark = 64 * 1024;
-    clientConn.writableHighWaterMark = 64 * 1024;
+const LISTEN_HOST = process.env.MAIN_MUX_LISTEN_HOST || "0.0.0.0";
+const LISTEN_PORT = parseInt(
+  process.env.MAIN_MUX_PORT || process.env.PORT || "443",
+  10
+);
 
-    let backendConn = null;
-    let isConnected = false;
-    const earlyBuffer = [];
+const SSL_TARGET_HOST = process.env.SSL_TARGET_HOST || "127.0.0.1";
+const SSL_TARGET_PORT = parseInt(
+  process.env.SSL_TARGET_PORT || "2443",
+  10
+); // stunnel internal
 
-    const handleInitialData = (buffer) => {
-        if (!buffer || buffer.length === 0) return;
+const WS_TARGET_HOST = process.env.WS_MUX_TARGET_HOST || "127.0.0.1";
+const WS_TARGET_PORT = parseInt(
+  process.env.WS_MUX_TARGET_PORT || "8880",
+  10
+); // ws-proxy internal
 
-        clientConn.removeListener('data', handleInitialData);
+const TLS_HANDSHAKE_BYTE = 0x16;
 
-        // ⚡ PEMISAH LALU LINTAS MURNI:
-        // Cuma cek Byte Pertama: 0x16 = Handshake TLS/SSL -> Stunnel (2443)
-        // Selain itu (HTTP/WS/Inject Payload) -> WS-Proxy (8880)
-        const targetPort = (buffer[0] === 0x16) ? SSL_TARGET : WS_TARGET;
+function log(level, msg) {
+  const ts = new Date().toISOString();
+  console.log(`[mux] ${ts} ${level} ${msg}`);
+}
 
-        backendConn = net.createConnection({ port: targetPort, host: '127.0.0.1' }, () => {
-            isConnected = true;
-            backendConn.setNoDelay(true);
-            backendConn.setKeepAlive(true, 15000);
+const server = net.createServer((socket) => {
+  const peer = `${socket.remoteAddress}:${socket.remotePort}`;
+  let backend = null;
 
-            backendConn.write(buffer);
+  socket.on("error", (err) => {
+    log("DEBUG", `Socket error ${peer}: ${err.message}`);
+  });
 
-            while (earlyBuffer.length > 0) {
-                const chunk = earlyBuffer.shift();
-                backendConn.write(chunk);
-            }
-        });
+  // Intip chunk pertama tanpa membuang data (chunk tetap kita simpan & teruskan)
+  socket.once("data", (firstChunk) => {
+    // Hentikan sementara agar sisa data yang datang tidak hilang sebelum pipe dipasang
+    socket.pause();
 
-        clientConn.on('data', (data) => {
-            if (isConnected && backendConn && backendConn.writable) {
-                const flush = backendConn.write(data);
-                if (!flush) clientConn.pause();
-            } else {
-                earlyBuffer.push(data);
-            }
-        });
+    if (!firstChunk || firstChunk.length === 0) {
+      socket.destroy();
+      return;
+    }
 
-        backendConn.on('data', (data) => {
-            if (clientConn.writable) {
-                const flush = clientConn.write(data);
-                if (!flush) backendConn.pause();
-            }
-        });
+    const firstByte = firstChunk[0];
+    let targetHost, targetPort, label;
 
-        backendConn.on('drain', () => clientConn.resume());
-        clientConn.on('drain', () => backendConn.resume());
+    if (firstByte === TLS_HANDSHAKE_BYTE) {
+      targetHost = SSL_TARGET_HOST;
+      targetPort = SSL_TARGET_PORT;
+      label = "SSL/stunnel";
+    } else {
+      targetHost = WS_TARGET_HOST;
+      targetPort = WS_TARGET_PORT;
+      label = "WS";
+    }
 
-        backendConn.on('error', () => clientConn.destroy());
-        clientConn.on('error', () => backendConn ? backendConn.destroy() : null);
-        backendConn.on('close', () => clientConn.destroy());
-        clientConn.on('close', () => backendConn ? backendConn.destroy() : null);
-    };
+    log(
+      "INFO",
+      `Koneksi ${peer} dikenali sebagai ${label} -> ${targetHost}:${targetPort}`
+    );
 
-    clientConn.on('data', handleInitialData);
+    backend = net.connect({ host: targetHost, port: targetPort });
+    let connected = false;
+
+    backend.once("connect", () => {
+      connected = true;
+
+      // Kirim dulu byte/chunk pertama yang sudah kita intip
+      backend.write(firstChunk);
+
+      // Baru relay dua arah (pipe otomatis menangani backpressure)
+      socket.pipe(backend);
+      backend.pipe(socket);
+
+      // Lanjutkan aliran data sisa dari socket
+      socket.resume();
+    });
+
+    backend.on("error", (err) => {
+      log(
+        "ERROR",
+        `Gagal konek ke backend ${label} -> ${targetHost}:${targetPort} : ${err.message}`
+      );
+      if (!connected) {
+        socket.destroy();
+      }
+    });
+
+    backend.on("close", () => {
+      socket.destroy();
+    });
+  });
+
+  socket.on("close", () => {
+    if (backend) backend.destroy();
+  });
 });
 
-server.listen(PUBLIC_PORT, '0.0.0.0', () => {
-    console.log(`[Mux JS] Pure Traffic Splitter Active on Port ${PUBLIC_PORT}`);
+server.on("error", (err) => {
+  log("ERROR", `Server error: ${err.message}`);
+  process.exit(1);
 });
+
+server.listen(LISTEN_PORT, LISTEN_HOST, () => {
+  log(
+    "INFO",
+    `Mux jalan di ${LISTEN_HOST}:${LISTEN_PORT} -> ` +
+      `SSL:${SSL_TARGET_HOST}:${SSL_TARGET_PORT} | ` +
+      `WS:${WS_TARGET_HOST}:${WS_TARGET_PORT}`
+  );
+});
+
+function shutdown(signal) {
+  log("INFO", `Menerima ${signal}, menutup server...`);
+  server.close(() => process.exit(0));
+  // Paksa keluar setelah 3 detik bila koneksi menggantung
+  setTimeout(() => process.exit(0), 3000).unref();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
