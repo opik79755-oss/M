@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const http = require("http");
+import http from 'http';
 const url = require("url");
 const axios = require("axios");
 const os = require('os');
